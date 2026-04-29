@@ -1,0 +1,545 @@
+{
+  "name": "Marketing Content Multi-Agent Pipeline",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "triggerAtHour": 7,
+              "field": "hours"
+            }
+          ]
+        }
+      },
+      "id": "node-cron",
+      "name": "Cron — 7h diário",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [260, 60]
+    },
+    {
+      "parameters": {
+        "url": "https://serpapi.com/search",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "engine", "value": "google_trends" },
+            { "name": "q", "value": "={{ $vars.MARKETING_NICHE }}" },
+            { "name": "api_key", "value": "={{ $credentials.serpApiKey }}" },
+            { "name": "data_type", "value": "TIMESERIES" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "node-serp",
+      "name": "SerpAPI — Google Trends",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [500, 200]
+    },
+    {
+      "parameters": {
+        "url": "https://www.reddit.com/r/marketing/top.json",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "limit", "value": "20" },
+            { "name": "t", "value": "week" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "node-reddit",
+      "name": "Reddit API — Posts em alta",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [500, 340]
+    },
+    {
+      "parameters": {
+        "url": "={{ $vars.RSS_FEED_URL }}",
+        "options": {}
+      },
+      "id": "node-rss",
+      "name": "RSS Feed — Portais do setor",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [500, 480]
+    },
+    {
+      "parameters": {
+        "mode": "mergeByPosition",
+        "options": {}
+      },
+      "id": "node-merge",
+      "name": "Merge — Consolidar fontes",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 2.1,
+      "position": [760, 340]
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst seen = new Set();\nconst unique = [];\nfor (const item of items) {\n  const key = (item.json.title || item.json.query || '').toLowerCase().trim();\n  if (!seen.has(key) && key.length > 3) {\n    seen.add(key);\n    unique.push({ json: { title: key, source: item.json.source || 'unknown', raw: item.json } });\n  }\n}\nreturn unique.slice(0, 30);"
+      },
+      "id": "node-dedup",
+      "name": "Function — Deduplicate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [980, 340]
+    },
+    {
+      "parameters": {
+        "agent": "conversationalAgent",
+        "promptType": "define",
+        "text": "=Você é um Agente Orquestrador de Conteúdo de Marketing.\n\nSua missão é analisar os seguintes temas em alta e coordenar a criação de conteúdo de alta qualidade.\n\nTEMAS DETECTADOS:\n{{ $json.topics }}\n\nSiga este processo:\n1. Analise todos os temas e selecione os 3 com maior potencial\n2. Para cada tema selecionado, gere o conteúdo nos formatos: blog (800 palavras), caption Instagram (150 chars), thread LinkedIn (5 bullets)\n3. Chame a ferramenta seo_reviewer para revisar SEO de cada conteúdo\n4. Chame a ferramenta brand_voice_reviewer para avaliar tom e originalidade\n5. Calcule o score final ponderado: SEO 40% + Brand Voice 60%\n6. Se score >= 8: marque como APROVADO_AUTO\n   Se score entre 6 e 7.9: marque como REQUER_REVISAO\n   Se score < 6: reescreva o conteúdo e reavalie uma vez\n7. Retorne JSON estruturado com todos os conteúdos, scores e status\n\nRetorne APENAS JSON válido no formato:\n{\n  \"approved\": [...],\n  \"needs_review\": [...],\n  \"rejected\": [...]\n}",
+        "options": {
+          "systemMessage": "Você é um especialista em marketing de conteúdo B2B/B2C com 10 anos de experiência. Você sempre retorna JSON válido, nunca texto livre fora do JSON."
+        }
+      },
+      "id": "node-orchestrator",
+      "name": "AI Agent — Orquestrador",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1.7,
+      "position": [1200, 340]
+    },
+    {
+      "parameters": {
+        "model": "gpt-4o",
+        "options": {
+          "temperature": 0.3
+        }
+      },
+      "id": "node-llm-orchestrator",
+      "name": "GPT-4o — Modelo do Orquestrador",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.1,
+      "position": [1200, 500]
+    },
+    {
+      "parameters": {
+        "name": "seo_reviewer",
+        "description": "Revisa um conteúdo e retorna score de SEO de 0 a 10. Avalia: densidade de palavras-chave, legibilidade, presença de CTA, estrutura de headings, meta description.",
+        "workflowId": "={{ $workflow.id }}",
+        "fields": {
+          "values": [
+            {
+              "name": "content",
+              "type": "string",
+              "description": "O conteúdo completo a ser revisado"
+            },
+            {
+              "name": "target_keyword",
+              "type": "string",
+              "description": "A palavra-chave principal do conteúdo"
+            }
+          ]
+        }
+      },
+      "id": "node-tool-seo",
+      "name": "Tool — SEO Reviewer (Claude)",
+      "type": "@n8n/n8n-nodes-langchain.toolWorkflow",
+      "typeVersion": 1.2,
+      "position": [1040, 540]
+    },
+    {
+      "parameters": {
+        "name": "brand_voice_reviewer",
+        "description": "Avalia tom de voz, originalidade e consistência com brand voice. Retorna score de 0 a 10 e sugestões de melhoria.",
+        "workflowId": "={{ $workflow.id }}",
+        "fields": {
+          "values": [
+            {
+              "name": "content",
+              "type": "string",
+              "description": "O conteúdo completo a ser avaliado"
+            },
+            {
+              "name": "format",
+              "type": "string",
+              "description": "Formato do conteúdo: blog, instagram, linkedin"
+            }
+          ]
+        }
+      },
+      "id": "node-tool-brand",
+      "name": "Tool — Brand Voice (Claude)",
+      "type": "@n8n/n8n-nodes-langchain.toolWorkflow",
+      "typeVersion": 1.2,
+      "position": [1360, 540]
+    },
+    {
+      "parameters": {
+        "model": "claude-3-5-sonnet-20241022",
+        "options": {
+          "temperature": 0.2
+        }
+      },
+      "id": "node-llm-seo",
+      "name": "Claude 3.5 — Revisor SEO",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.2,
+      "position": [1040, 680]
+    },
+    {
+      "parameters": {
+        "model": "claude-3-5-sonnet-20241022",
+        "options": {
+          "temperature": 0.2
+        }
+      },
+      "id": "node-llm-brand",
+      "name": "Claude 3.5 — Brand Voice",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.2,
+      "position": [1360, 680]
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.first().json.output || '{}';\nlet parsed;\ntry {\n  const clean = raw.replace(/```json|```/g, '').trim();\n  parsed = JSON.parse(clean);\n} catch(e) {\n  parsed = { approved: [], needs_review: [], rejected: [], error: e.message };\n}\nreturn [{ json: parsed }];"
+      },
+      "id": "node-parse",
+      "name": "Function — Parse Agent Output",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1460, 340]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": false },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.needs_review.length }}",
+              "rightValue": 0,
+              "operator": { "type": "number", "operation": "gt" }
+            }
+          ]
+        }
+      },
+      "id": "node-if-review",
+      "name": "IF — Precisa revisão humana?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1700, 340]
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "={{ $vars.SLACK_CHANNEL_ID }}",
+          "mode": "id"
+        },
+        "text": "=*Conteúdo aguardando sua revisão*\n\n*Tema:* {{ $json.needs_review[0].topic }}\n*Score SEO:* {{ $json.needs_review[0].seo_score }}/10\n*Score Brand Voice:* {{ $json.needs_review[0].brand_score }}/10\n*Score Final:* {{ $json.needs_review[0].final_score }}/10\n\n*Preview do Blog:*\n{{ $json.needs_review[0].blog.substring(0, 300) }}...\n\nResponda com *APROVAR* ou *REJEITAR* + motivo.",
+        "otherOptions": {}
+      },
+      "id": "node-slack-review",
+      "name": "Slack — Pedir aprovação humana",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.2,
+      "position": [1940, 240]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "content-approval",
+        "options": {}
+      },
+      "id": "node-webhook-wait",
+      "name": "Webhook — Aguardar decisão",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [1940, 380]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "leftValue": "={{ $json.body.decision }}",
+              "rightValue": "APROVAR",
+              "operator": { "type": "string", "operation": "equals" }
+            }
+          ]
+        }
+      },
+      "id": "node-if-approved",
+      "name": "IF — Aprovado pelo humano?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [2160, 380]
+    },
+    {
+      "parameters": {
+        "jsCode": "const approved = $('node-parse').first().json.approved || [];\nconst humanApproved = $('node-if-approved').first().json;\nconst allApproved = [...approved];\nif (humanApproved && humanApproved.topic) allApproved.push(humanApproved);\nconst scheduled = allApproved.map(item => ({\n  ...item,\n  schedule: {\n    wordpress: '09:00',\n    instagram: '12:00',\n    linkedin: '08:00',\n    newsletter: '10:00'\n  },\n  scheduled_at: new Date().toISOString()\n}));\nreturn scheduled.map(s => ({ json: s }));"
+      },
+      "id": "node-scheduler",
+      "name": "Function — Agendador inteligente",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2400, 340]
+    },
+    {
+      "parameters": {
+        "url": "={{ $vars.WORDPRESS_URL }}/wp-json/wp/v2/posts",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            { "name": "title", "value": "={{ $json.topic }}" },
+            { "name": "content", "value": "={{ $json.blog }}" },
+            { "name": "status", "value": "future" },
+            { "name": "date", "value": "={{ $json.schedule.wordpress }}" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "node-wordpress",
+      "name": "WordPress — Publicar blog",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2620, 180]
+    },
+    {
+      "parameters": {
+        "url": "https://graph.facebook.com/v19.0/={{ $vars.INSTAGRAM_ACCOUNT_ID }}/media",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            { "name": "caption", "value": "={{ $json.instagram }}" },
+            { "name": "image_url", "value": "={{ $json.image_url || $vars.DEFAULT_IMAGE_URL }}" },
+            { "name": "access_token", "value": "={{ $credentials.instagramToken }}" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "node-instagram",
+      "name": "Instagram — Publicar caption",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2620, 320]
+    },
+    {
+      "parameters": {
+        "url": "https://api.linkedin.com/v2/ugcPosts",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "Bearer {{ $credentials.linkedinToken }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"author\": \"urn:li:person:{{ $vars.LINKEDIN_PERSON_ID }}\",\n  \"lifecycleState\": \"PUBLISHED\",\n  \"specificContent\": {\n    \"com.linkedin.ugc.ShareContent\": {\n      \"shareCommentary\": { \"text\": \"{{ $json.linkedin }}\" },\n      \"shareMediaCategory\": \"NONE\"\n    }\n  },\n  \"visibility\": { \"com.linkedin.ugc.MemberNetworkVisibility\": \"PUBLIC\" }\n}",
+        "options": {}
+      },
+      "id": "node-linkedin",
+      "name": "LinkedIn — Publicar thread",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2620, 460]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": { "__rl": true, "value": "={{ $vars.SHEETS_DOC_ID }}", "mode": "id" },
+        "sheetName": { "__rl": true, "value": "Log de Publicações", "mode": "name" },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Data": "={{ $now.toISO() }}",
+            "Tema": "={{ $json.topic }}",
+            "Score Final": "={{ $json.final_score }}",
+            "Score SEO": "={{ $json.seo_score }}",
+            "Score Brand": "={{ $json.brand_score }}",
+            "Status": "={{ $json.status || 'publicado' }}",
+            "WordPress": "={{ $json.wordpress_url || 'agendado' }}",
+            "Instagram": "={{ $json.instagram_id || 'agendado' }}",
+            "LinkedIn": "={{ $json.linkedin_id || 'agendado' }}"
+          }
+        },
+        "options": {}
+      },
+      "id": "node-sheets-log",
+      "name": "Sheets — Log de publicações",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.4,
+      "position": [2620, 600]
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "={{ $vars.SLACK_CHANNEL_ID }}",
+          "mode": "id"
+        },
+        "text": "=*Pipeline de conteúdo concluído*\n\nConteúdos publicados automaticamente: {{ $('node-scheduler').all().length }}\nConteúdos no backlog: {{ $('node-parse').first().json.rejected.length }}\n\nAcesse o log completo no Google Sheets.",
+        "otherOptions": {}
+      },
+      "id": "node-slack-done",
+      "name": "Slack — Relatório final",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.2,
+      "position": [2840, 400]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": { "__rl": true, "value": "={{ $vars.SHEETS_DOC_ID }}", "mode": "id" },
+        "sheetName": { "__rl": true, "value": "Backlog de Ideias", "mode": "name" },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Data": "={{ $now.toISO() }}",
+            "Tema": "={{ $json.rejected[0].topic || '' }}",
+            "Motivo": "={{ $json.rejected[0].reason || 'Score abaixo do mínimo' }}",
+            "Score": "={{ $json.rejected[0].final_score || '' }}"
+          }
+        },
+        "options": {}
+      },
+      "id": "node-sheets-backlog",
+      "name": "Sheets — Backlog de ideias",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.4,
+      "position": [1940, 520]
+    },
+    {
+      "parameters": {
+        "errorMessage": "=Pipeline falhou no nó: {{ $execution.lastNodeExecuted }}\nErro: {{ $execution.error.message }}"
+      },
+      "id": "node-error",
+      "name": "Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [260, 700]
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "={{ $vars.SLACK_CHANNEL_ID }}",
+          "mode": "id"
+        },
+        "text": "=*ERRO no pipeline de marketing*\n\nNó: {{ $json.lastNodeExecuted }}\nErro: {{ $json.error.message }}\nHorário: {{ $now.toISO() }}",
+        "otherOptions": {}
+      },
+      "id": "node-slack-error",
+      "name": "Slack — Alerta de erro",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.2,
+      "position": [500, 700]
+    }
+  ],
+  "connections": {
+    "Cron — 7h diário": {
+      "main": [[
+        { "node": "SerpAPI — Google Trends", "type": "main", "index": 0 },
+        { "node": "Reddit API — Posts em alta", "type": "main", "index": 0 },
+        { "node": "RSS Feed — Portais do setor", "type": "main", "index": 0 }
+      ]]
+    },
+    "SerpAPI — Google Trends": {
+      "main": [[{ "node": "Merge — Consolidar fontes", "type": "main", "index": 0 }]]
+    },
+    "Reddit API — Posts em alta": {
+      "main": [[{ "node": "Merge — Consolidar fontes", "type": "main", "index": 1 }]]
+    },
+    "RSS Feed — Portais do setor": {
+      "main": [[{ "node": "Merge — Consolidar fontes", "type": "main", "index": 2 }]]
+    },
+    "Merge — Consolidar fontes": {
+      "main": [[{ "node": "Function — Deduplicate", "type": "main", "index": 0 }]]
+    },
+    "Function — Deduplicate": {
+      "main": [[{ "node": "AI Agent — Orquestrador", "type": "main", "index": 0 }]]
+    },
+    "AI Agent — Orquestrador": {
+      "main": [[{ "node": "Function — Parse Agent Output", "type": "main", "index": 0 }]]
+    },
+    "GPT-4o — Modelo do Orquestrador": {
+      "ai_languageModel": [[{ "node": "AI Agent — Orquestrador", "type": "ai_languageModel", "index": 0 }]]
+    },
+    "Tool — SEO Reviewer (Claude)": {
+      "ai_tool": [[{ "node": "AI Agent — Orquestrador", "type": "ai_tool", "index": 0 }]]
+    },
+    "Tool — Brand Voice (Claude)": {
+      "ai_tool": [[{ "node": "AI Agent — Orquestrador", "type": "ai_tool", "index": 1 }]]
+    },
+    "Claude 3.5 — Revisor SEO": {
+      "ai_languageModel": [[{ "node": "Tool — SEO Reviewer (Claude)", "type": "ai_languageModel", "index": 0 }]]
+    },
+    "Claude 3.5 — Brand Voice": {
+      "ai_languageModel": [[{ "node": "Tool — Brand Voice (Claude)", "type": "ai_languageModel", "index": 0 }]]
+    },
+    "Function — Parse Agent Output": {
+      "main": [[{ "node": "IF — Precisa revisão humana?", "type": "main", "index": 0 }]]
+    },
+    "IF — Precisa revisão humana?": {
+      "main": [
+        [
+          { "node": "Slack — Pedir aprovação humana", "type": "main", "index": 0 },
+          { "node": "Webhook — Aguardar decisão", "type": "main", "index": 0 }
+        ],
+        [
+          { "node": "Function — Agendador inteligente", "type": "main", "index": 0 },
+          { "node": "Sheets — Backlog de ideias", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Webhook — Aguardar decisão": {
+      "main": [[{ "node": "IF — Aprovado pelo humano?", "type": "main", "index": 0 }]]
+    },
+    "IF — Aprovado pelo humano?": {
+      "main": [
+        [{ "node": "Function — Agendador inteligente", "type": "main", "index": 0 }],
+        [{ "node": "Sheets — Backlog de ideias", "type": "main", "index": 0 }]
+      ]
+    },
+    "Function — Agendador inteligente": {
+      "main": [[
+        { "node": "WordPress — Publicar blog", "type": "main", "index": 0 },
+        { "node": "Instagram — Publicar caption", "type": "main", "index": 0 },
+        { "node": "LinkedIn — Publicar thread", "type": "main", "index": 0 },
+        { "node": "Sheets — Log de publicações", "type": "main", "index": 0 }
+      ]]
+    },
+    "WordPress — Publicar blog": {
+      "main": [[{ "node": "Slack — Relatório final", "type": "main", "index": 0 }]]
+    },
+    "Instagram — Publicar caption": {
+      "main": [[{ "node": "Slack — Relatório final", "type": "main", "index": 0 }]]
+    },
+    "LinkedIn — Publicar thread": {
+      "main": [[{ "node": "Slack — Relatório final", "type": "main", "index": 0 }]]
+    },
+    "Sheets — Log de publicações": {
+      "main": [[{ "node": "Slack — Relatório final", "type": "main", "index": 0 }]]
+    },
+    "Error Trigger": {
+      "main": [[{ "node": "Slack — Alerta de erro", "type": "main", "index": 0 }]]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": "node-error"
+  },
+  "staticData": null,
+  "tags": [
+    { "name": "marketing" },
+    { "name": "multi-agent" },
+    { "name": "conteudo" },
+    { "name": "automacao" }
+  ],
+  "triggerCount": 1,
+  "updatedAt": "2026-03-27T07:00:00.000Z",
+  "versionId": "1"
+}
